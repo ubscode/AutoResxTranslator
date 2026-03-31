@@ -6,6 +6,9 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Reflection;
 using System.Windows.Forms;
 using System.Xml;
 using AutoResxTranslator.Definitions;
@@ -103,6 +106,29 @@ namespace AutoResxTranslator
 			};
 		private bool _translateSettingsChanged;
 		private DateTime _lastProgressLogUtc = DateTime.MinValue;
+		private bool _ubsThemeApplied;
+		private readonly HashSet<Button> _styledButtons = new HashSet<Button>();
+		private readonly Dictionary<Button, ButtonThemeState> _buttonStates = new Dictionary<Button, ButtonThemeState>();
+		private readonly HashSet<GroupBox> _styledGroupBoxes = new HashSet<GroupBox>();
+		private readonly Color _ubsBg = Color.FromArgb(246, 248, 252);
+		private readonly Color _ubsSurface = Color.White;
+		private readonly Color _ubsPrimaryText = Color.FromArgb(0, 20, 50);
+		private readonly Color _ubsMutedText = Color.FromArgb(72, 93, 122);
+		private readonly Color _ubsBorder = Color.FromArgb(201, 214, 233);
+		private readonly Color _ubsAccent = Color.FromArgb(255, 94, 12);
+		private readonly Color _ubsAccentPressed = Color.FromArgb(230, 77, 0);
+		private readonly Color _ubsDark = Color.FromArgb(0, 20, 50);
+		private readonly Color _ubsDarkHover = Color.FromArgb(9, 35, 76);
+		private readonly Color _ubsDarkPressed = Color.FromArgb(0, 14, 36);
+		private readonly Color _ubsSecondaryHover = Color.FromArgb(235, 241, 250);
+		private readonly Color _ubsSecondaryPressed = Color.FromArgb(223, 232, 245);
+
+		private sealed class ButtonThemeState
+		{
+			public bool IsPrimary;
+			public bool IsHovered;
+			public bool IsPressed;
+		}
 
 		private static string SafeText(string value, int maxLength = 160)
 		{
@@ -126,6 +152,397 @@ namespace AutoResxTranslator
 					return ServiceTypeEnum.DeepL;
 				return ServiceTypeEnum.Microsoft;
 			}
+		}
+
+		private void ApplyUbsTheme()
+		{
+			if (_ubsThemeApplied)
+				return;
+
+			_ubsThemeApplied = true;
+			SuspendLayout();
+			EnableDoubleBuffer(tabMain);
+
+			Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+			BackColor = _ubsBg;
+			ForeColor = _ubsPrimaryText;
+
+			tabMain.BackColor = _ubsBg;
+			tabMain.DrawMode = TabDrawMode.OwnerDrawFixed;
+			tabMain.SizeMode = TabSizeMode.Fixed;
+			tabMain.ItemSize = new Size(130, 32);
+			tabMain.DrawItem += tabMain_DrawItem;
+			Paint += frmMain_PaintBrandAccent;
+
+			ApplyThemeToControls(this.Controls);
+
+			panel1.BackColor = _ubsSurface;
+			panel2.BackColor = _ubsSurface;
+			groupBox1.BackColor = _ubsSurface;
+			groupBox2.BackColor = _ubsSurface;
+			lblResxTranslateStatus.ForeColor = _ubsMutedText;
+
+			txtSourceResx.BackColor = Color.FromArgb(239, 244, 251);
+			txtExcelResx.BackColor = Color.FromArgb(239, 244, 251);
+			StyleButton(btnTranslate, true);
+			StyleButton(btnStartResxTranslate, true);
+			StyleButton(btnImportExcel, true);
+
+			lnkAbout.LinkColor = _ubsAccent;
+			lnkAbout.ActiveLinkColor = _ubsAccentPressed;
+			lnkAbout.VisitedLinkColor = _ubsAccent;
+			lnkAbout.LinkBehavior = LinkBehavior.HoverUnderline;
+
+			ResumeLayout(true);
+		}
+
+		private void frmMain_PaintBrandAccent(object sender, PaintEventArgs e)
+		{
+			using (var brush = new SolidBrush(_ubsAccent))
+			{
+				e.Graphics.FillRectangle(brush, new Rectangle(0, 0, Width, 4));
+			}
+		}
+
+		private void tabMain_DrawItem(object sender, DrawItemEventArgs e)
+		{
+			var tab = tabMain.TabPages[e.Index];
+			var bounds = Rectangle.Inflate(e.Bounds, -3, -3);
+			var isSelected = e.Index == tabMain.SelectedIndex;
+			var tabBack = isSelected ? _ubsDark : _ubsSurface;
+			var tabFore = isSelected ? Color.White : _ubsPrimaryText;
+
+			using (var tabPath = CreateRoundRectPath(bounds, 8))
+			using (var backBrush = new SolidBrush(tabBack))
+			using (var borderPen = new Pen(isSelected ? _ubsDark : _ubsBorder))
+			{
+				e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+				e.Graphics.FillPath(backBrush, tabPath);
+				e.Graphics.DrawPath(borderPen, tabPath);
+			}
+
+			if (isSelected)
+			{
+				using (var accentBrush = new SolidBrush(_ubsAccent))
+					e.Graphics.FillRectangle(accentBrush, bounds.Left, bounds.Bottom - 3, bounds.Width, 3);
+			}
+
+			TextRenderer.DrawText(
+				e.Graphics,
+				tab.Text,
+				Font,
+				bounds,
+				tabFore,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+		}
+
+		private void ApplyThemeToControls(Control.ControlCollection controls)
+		{
+			foreach (Control control in controls)
+			{
+				if (control is TabPage page)
+				{
+					page.BackColor = _ubsBg;
+					page.ForeColor = _ubsPrimaryText;
+				}
+				else if (control is GroupBox group)
+				{
+					group.BackColor = _ubsSurface;
+					group.ForeColor = _ubsPrimaryText;
+					StyleGroupBox(group);
+				}
+				else if (control is Panel panel)
+				{
+					panel.BackColor = _ubsBg;
+					panel.ForeColor = _ubsPrimaryText;
+				}
+				else if (control is Label label)
+				{
+					label.ForeColor = _ubsPrimaryText;
+				}
+				else if (control is TextBox textBox)
+				{
+					textBox.BorderStyle = BorderStyle.FixedSingle;
+					textBox.BackColor = textBox.ReadOnly ? Color.FromArgb(239, 244, 251) : _ubsSurface;
+					textBox.ForeColor = _ubsPrimaryText;
+					if (!textBox.Multiline && textBox.Dock == DockStyle.None)
+						ApplyRoundedRegion(textBox, 5);
+				}
+				else if (control is ComboBox combo)
+				{
+					combo.FlatStyle = FlatStyle.Flat;
+					combo.BackColor = _ubsSurface;
+					combo.ForeColor = _ubsPrimaryText;
+				}
+				else if (control is CheckBox checkBox)
+				{
+					checkBox.BackColor = checkBox.Parent != null ? checkBox.Parent.BackColor : _ubsBg;
+					checkBox.ForeColor = _ubsPrimaryText;
+					checkBox.UseVisualStyleBackColor = false;
+				}
+				else if (control is RadioButton radio)
+				{
+					radio.BackColor = _ubsSurface;
+					radio.ForeColor = _ubsPrimaryText;
+					radio.UseVisualStyleBackColor = false;
+				}
+				else if (control is ListView listView)
+				{
+					listView.BackColor = _ubsSurface;
+					listView.ForeColor = _ubsPrimaryText;
+					listView.BorderStyle = BorderStyle.FixedSingle;
+					listView.HideSelection = false;
+				}
+				else if (control is Button button)
+				{
+					StyleButton(button, false);
+				}
+				else if (control is LinkLabel link)
+				{
+					link.LinkColor = _ubsAccent;
+					link.ActiveLinkColor = _ubsAccentPressed;
+					link.VisitedLinkColor = _ubsAccent;
+					link.LinkBehavior = LinkBehavior.HoverUnderline;
+				}
+
+				if (control.HasChildren)
+					ApplyThemeToControls(control.Controls);
+			}
+		}
+
+		private void StyleButton(Button button, bool primary)
+		{
+			button.UseVisualStyleBackColor = false;
+			button.FlatStyle = FlatStyle.Flat;
+			button.FlatAppearance.BorderSize = 1;
+			button.Cursor = Cursors.Hand;
+
+			if (primary)
+			{
+				button.BackColor = _ubsDark;
+				button.ForeColor = Color.White;
+				button.FlatAppearance.BorderColor = _ubsDark;
+				button.FlatAppearance.MouseOverBackColor = _ubsDarkHover;
+				button.FlatAppearance.MouseDownBackColor = _ubsDarkPressed;
+			}
+			else
+			{
+				button.BackColor = _ubsSurface;
+				button.ForeColor = _ubsPrimaryText;
+				button.FlatAppearance.BorderColor = _ubsPrimaryText;
+				button.FlatAppearance.MouseOverBackColor = _ubsSecondaryHover;
+				button.FlatAppearance.MouseDownBackColor = _ubsSecondaryPressed;
+			}
+
+			if (!_buttonStates.ContainsKey(button))
+				_buttonStates.Add(button, new ButtonThemeState());
+			_buttonStates[button].IsPrimary = primary;
+
+			if (_styledButtons.Add(button))
+			{
+				button.Paint += button_PaintModern;
+				button.Resize += button_ResizeModern;
+				button.MouseEnter += button_MouseEnterModern;
+				button.MouseLeave += button_MouseLeaveModern;
+				button.MouseDown += button_MouseDownModern;
+				button.MouseUp += button_MouseUpModern;
+			}
+
+			ApplyRoundedRegion(button, 10);
+			button.Invalidate();
+		}
+
+		private void StyleGroupBox(GroupBox group)
+		{
+			if (_styledGroupBoxes.Add(group))
+			{
+				group.Paint += groupBox_PaintModern;
+				group.Padding = new Padding(12, 26, 12, 12);
+				group.FlatStyle = FlatStyle.Flat;
+			}
+		}
+
+		private void groupBox_PaintModern(object sender, PaintEventArgs e)
+		{
+			if (!(sender is GroupBox group))
+				return;
+
+			e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+			e.Graphics.Clear(group.Parent?.BackColor ?? _ubsBg);
+
+			var textRect = new Rectangle(14, 0, group.Width - 24, 18);
+			var borderRect = new Rectangle(0, 10, group.Width - 1, group.Height - 12);
+
+			using (var path = CreateRoundRectPath(borderRect, 10))
+			using (var backBrush = new SolidBrush(_ubsSurface))
+			using (var borderPen = new Pen(_ubsBorder))
+			{
+				e.Graphics.FillPath(backBrush, path);
+				e.Graphics.DrawPath(borderPen, path);
+			}
+
+			using (var captionBack = new SolidBrush(group.Parent?.BackColor ?? _ubsBg))
+				e.Graphics.FillRectangle(captionBack, textRect);
+
+			TextRenderer.DrawText(
+				e.Graphics,
+				group.Text,
+				new Font(group.Font, FontStyle.Bold),
+				new Point(textRect.X + 4, textRect.Y + 1),
+				_ubsPrimaryText);
+		}
+
+		private void button_ResizeModern(object sender, EventArgs e)
+		{
+			if (sender is Button button)
+				ApplyRoundedRegion(button, 10);
+		}
+
+		private void button_MouseEnterModern(object sender, EventArgs e)
+		{
+			UpdateButtonState(sender as Button, true, null);
+		}
+
+		private void button_MouseLeaveModern(object sender, EventArgs e)
+		{
+			UpdateButtonState(sender as Button, false, false);
+		}
+
+		private void button_MouseDownModern(object sender, MouseEventArgs e)
+		{
+			if (e.Button == MouseButtons.Left)
+				UpdateButtonState(sender as Button, null, true);
+		}
+
+		private void button_MouseUpModern(object sender, MouseEventArgs e)
+		{
+			UpdateButtonState(sender as Button, null, false);
+		}
+
+		private void UpdateButtonState(Button button, bool? hovered, bool? pressed)
+		{
+			if (button == null || !_buttonStates.TryGetValue(button, out var state))
+				return;
+
+			if (hovered.HasValue)
+				state.IsHovered = hovered.Value;
+			if (pressed.HasValue)
+				state.IsPressed = pressed.Value;
+			button.Invalidate();
+		}
+
+		private void button_PaintModern(object sender, PaintEventArgs e)
+		{
+			if (!(sender is Button button))
+				return;
+
+			if (!_buttonStates.TryGetValue(button, out var state))
+				return;
+
+			e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+			e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+			var rect = new Rectangle(0, 0, button.Width - 1, button.Height - 1);
+			if (rect.Width <= 0 || rect.Height <= 0)
+				return;
+
+			Color fillColor;
+			Color borderColor;
+			Color textColor;
+
+			if (!button.Enabled)
+			{
+				fillColor = Color.FromArgb(226, 231, 240);
+				borderColor = Color.FromArgb(205, 210, 218);
+				textColor = _ubsMutedText;
+			}
+			else if (state.IsPrimary)
+			{
+				if (state.IsPressed)
+				{
+					fillColor = _ubsDarkPressed;
+				}
+				else if (state.IsHovered)
+				{
+					fillColor = _ubsDarkHover;
+				}
+				else
+				{
+					fillColor = _ubsDark;
+				}
+				borderColor = _ubsDark;
+				textColor = Color.White;
+			}
+			else
+			{
+				if (state.IsPressed)
+				{
+					fillColor = _ubsSecondaryPressed;
+				}
+				else if (state.IsHovered)
+				{
+					fillColor = _ubsSecondaryHover;
+				}
+				else
+				{
+					fillColor = _ubsSurface;
+				}
+				borderColor = _ubsPrimaryText;
+				textColor = _ubsPrimaryText;
+			}
+
+			using (var path = CreateRoundRectPath(rect, 10))
+			using (var fillBrush = new SolidBrush(fillColor))
+			using (var borderPen = new Pen(borderColor))
+			{
+				e.Graphics.FillPath(fillBrush, path);
+				e.Graphics.DrawPath(borderPen, path);
+			}
+
+			var textRect = new Rectangle(0, 0, button.Width, button.Height);
+			TextRenderer.DrawText(
+				e.Graphics,
+				button.Text,
+				button.Font,
+				textRect,
+				textColor,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+		}
+
+		private void ApplyRoundedRegion(Control control, int radius)
+		{
+			if (control.Width <= 2 || control.Height <= 2)
+				return;
+
+			using (var path = CreateRoundRectPath(new Rectangle(0, 0, control.Width - 1, control.Height - 1), radius))
+			{
+				var oldRegion = control.Region;
+				control.Region = new Region(path);
+				oldRegion?.Dispose();
+			}
+		}
+
+		private GraphicsPath CreateRoundRectPath(Rectangle rect, int radius)
+		{
+			var path = new GraphicsPath();
+			var diameter = Math.Max(2, radius * 2);
+			var arc = new Rectangle(rect.Location, new Size(diameter, diameter));
+
+			path.AddArc(arc, 180, 90);
+			arc.X = rect.Right - diameter;
+			path.AddArc(arc, 270, 90);
+			arc.Y = rect.Bottom - diameter;
+			path.AddArc(arc, 0, 90);
+			arc.X = rect.Left;
+			path.AddArc(arc, 90, 90);
+			path.CloseFigure();
+			return path;
+		}
+
+		private static void EnableDoubleBuffer(Control control)
+		{
+			var prop = typeof(Control).GetProperty("DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic);
+			prop?.SetValue(control, true, null);
 		}
 
 		void FillComboBoxes()
@@ -702,6 +1119,7 @@ namespace AutoResxTranslator
 			txtDeepLTranslationKey.Text = Properties.Settings.Default.DeepLTranslatorKey;
 			cmbDeeplApiType.SelectedIndex = Properties.Settings.Default.DeepLTranslatorType;
 			tabMain.TabPages.Remove(tabBrowser);
+			ApplyUbsTheme();
 			AppLog.Info($"frmMain_Load done. Log file: '{AppLog.CurrentLogFilePath}'");
 		}
 
