@@ -674,8 +674,10 @@ namespace AutoResxTranslator
 				}
 
 				// reset selection
-				foreach (int i in lstResxLanguages.CheckedIndices)
-					lstResxLanguages.Items[i].Checked = false;
+				foreach (ListViewItem item in lstResxLanguages.Items)
+				{
+					item.Checked = false;
+				}
 
 				// select based on what is in destination
 				string[] languageFilesInDir = Directory.GetFiles(Path.GetDirectoryName(txtSourceResx.Text), "*.resx");
@@ -683,12 +685,16 @@ namespace AutoResxTranslator
 				foreach (var lngFile in languageFilesInDir)
 				{
 					var languageTag = ReadLanguageName(lngFile);
-					if (languageTag != "")
-					{
-						var haskey = _languages.FirstOrDefault(x => x.Key.Equals(languageTag, StringComparison.InvariantCultureIgnoreCase));
+					if (string.IsNullOrWhiteSpace(languageTag))
+						continue;
 
-						lstResxLanguages.Items[lstResxLanguages.Items.IndexOfKey(haskey.Key)].Checked = true;
-					}
+					var haskey = _languages.FirstOrDefault(x => x.Key.Equals(languageTag, StringComparison.InvariantCultureIgnoreCase));
+					if (string.IsNullOrEmpty(haskey.Key))
+						continue;
+
+					int index = lstResxLanguages.Items.IndexOfKey(haskey.Key);
+					if (index >= 0)
+						lstResxLanguages.Items[index].Checked = true;
 				}
 
 				var lng = ReadLanguageName(txtSourceResx.Text);
