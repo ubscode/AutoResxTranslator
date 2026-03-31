@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Diagnostics;
 using System.Text;
 using System.Web;
 
@@ -41,6 +42,8 @@ namespace AutoResxTranslator
 			string textTranslatorUrlKey,
 			out string result)
 		{
+			var sw = Stopwatch.StartNew();
+			AppLog.Info($"Google request start | from={sourceLng} to={destLng} chars={text?.Length ?? 0}");
 			var request = CreateWebRequest(text, sourceLng, destLng, textTranslatorUrlKey);
 			try
 			{
@@ -56,11 +59,13 @@ namespace AutoResxTranslator
 				{
 					var succeed = ReadGoogleTranslatedResult(stream, out var output);
 					result = output;
+					AppLog.Info($"Google request done | success={succeed} | elapsedMs={sw.ElapsedMilliseconds}");
 					return succeed;
 				}
 			}
 			catch (Exception ex)
 			{
+				AppLog.Error($"Google request exception | elapsedMs={sw.ElapsedMilliseconds}", ex);
 				result = ex.Message;
 				return false;
 			}

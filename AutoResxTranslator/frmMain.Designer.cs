@@ -851,7 +851,7 @@
             this.MinimumSize = new System.Drawing.Size(500, 400);
             this.Name = "frmMain";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "Auto Resource Translator";
+            this.Text = "Auto Resource Translator (fork by United Barcode Systems)";
             this.Load += new System.EventHandler(this.frmMain_Load);
             this.tabMain.ResumeLayout(false);
             this.tabPage2.ResumeLayout(false);

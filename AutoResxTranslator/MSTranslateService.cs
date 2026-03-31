@@ -1,11 +1,10 @@
-﻿using Newtonsoft.Json;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Net.Http;
-using System.Threading.Tasks;
 using AutoResxTranslator.Definitions;
+using Newtonsoft.Json;
+using System;
+using System.Diagnostics;
+using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace AutoResxTranslator
 {
@@ -24,6 +23,8 @@ namespace AutoResxTranslator
 			string subscriptionKey,
 			string region)
 		{
+			var sw = Stopwatch.StartNew();
+
 			if (fromLanguage.Equals("auto") || fromLanguage.Equals(""))
 			{
 				fromLanguage = null;
@@ -37,12 +38,15 @@ namespace AutoResxTranslator
 
 			try
 			{
+				AppLog.Info($"MS request start | from={fromLanguage ?? "auto"} to={toLanguage} chars={text?.Length ?? 0}");
 				var body = new object[] { new { Text = text } };
 				var requestBody = JsonConvert.SerializeObject(body);
 
 				using (var client = new HttpClient())
 				using (var request = new HttpRequestMessage())
 				{
+					client.Timeout = TimeSpan.FromSeconds(60);
+
 					// Build the request.
 					request.Method = HttpMethod.Post;
 					request.RequestUri = new Uri(MsCognitiveServicesApiUrl + route);
@@ -53,6 +57,7 @@ namespace AutoResxTranslator
 
 					// Send the request and get response.
 					var response = await client.SendAsync(request).ConfigureAwait(false);
+					AppLog.Info($"MS response | status={(int)response.StatusCode} {response.ReasonPhrase} | elapsedMs={sw.ElapsedMilliseconds}");
 
 					if (response.StatusCode == System.Net.HttpStatusCode.OK)
 					{
@@ -67,19 +72,24 @@ namespace AutoResxTranslator
 							// Iterate over the results, return the first result
 							foreach (var t in output.Translations)
 							{
+								AppLog.Info($"MS translation success | elapsedMs={sw.ElapsedMilliseconds}");
 								return new ResultHolder<string>(true, t.Text);
 							}
 						}
 					}
 					else
 					{
+						AppLog.Warn($"MS translation failed by status | elapsedMs={sw.ElapsedMilliseconds}");
 						return new ResultHolder<string>(false, "Translation failed! Exception: " + response.ReasonPhrase);
 					}
 				}
+
+				AppLog.Warn($"MS translation returned no results | elapsedMs={sw.ElapsedMilliseconds}");
 				return new ResultHolder<string>(false);
 			}
 			catch (Exception e)
 			{
+				AppLog.Error($"MS translation exception | elapsedMs={sw.ElapsedMilliseconds}", e);
 				return new ResultHolder<string>(false, "Translation failed! Exception: " + e.Message);
 			}
 		}

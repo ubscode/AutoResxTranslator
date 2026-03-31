@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -24,6 +25,7 @@ namespace AutoResxTranslator
 		public frmMain()
 		{
 			InitializeComponent();
+			AppLog.Info("frmMain initialized.");
 		}
 
 		private readonly Dictionary<string, string> _languages =
@@ -100,6 +102,19 @@ namespace AutoResxTranslator
 				{"yi", "Yiddish"}
 			};
 		private bool _translateSettingsChanged;
+		private DateTime _lastProgressLogUtc = DateTime.MinValue;
+
+		private static string SafeText(string value, int maxLength = 160)
+		{
+			if (string.IsNullOrEmpty(value))
+				return string.Empty;
+
+			var cleaned = value.Replace("\r", " ").Replace("\n", " ");
+			if (cleaned.Length <= maxLength)
+				return cleaned;
+
+			return cleaned.Substring(0, maxLength) + "...";
+		}
 
 		ServiceTypeEnum ServiceType
 		{
@@ -115,6 +130,7 @@ namespace AutoResxTranslator
 
 		void FillComboBoxes()
 		{
+			AppLog.Info("FillComboBoxes start.");
 			cmbSrc.DisplayMember = "Value";
 			cmbSrc.ValueMember = "Key";
 
@@ -133,10 +149,12 @@ namespace AutoResxTranslator
 			}
 			cmbSrc.SelectedIndex = 0;
 			cmbDesc.Text = "English";
+			AppLog.Info($"FillComboBoxes done. Languages loaded={lstResxLanguages.Items.Count}");
 		}
 
 		void SetResult(string result)
 		{
+			AppLog.Info($"SetResult called. textLength={result?.Length ?? 0} preview='{SafeText(result)}'");
 			if (this.InvokeRequired)
 			{
 				this.BeginInvoke(new Action<string>(SetResult), result);
@@ -150,6 +168,7 @@ namespace AutoResxTranslator
 
 		void IsBusy(bool isbusy)
 		{
+			AppLog.Info($"IsBusy({isbusy})");
 			if (this.InvokeRequired)
 			{
 				this.BeginInvoke(new Action<bool>(IsBusy), isbusy);
@@ -172,8 +191,9 @@ namespace AutoResxTranslator
 				var culture = new CultureInfo(language);
 				return language;
 			}
-			catch (Exception)
+			catch (Exception ex)
 			{
+				AppLog.Warn($"ReadLanguageName fallback to 'en' for '{fileName}'. {ex.Message}");
 				return "en";
 			}
 		}
@@ -191,8 +211,9 @@ namespace AutoResxTranslator
 				}
 				return file;
 			}
-			catch (Exception)
+			catch (Exception ex)
 			{
+				AppLog.Warn($"ReadLanguageFilename fallback to 'res' for '{fileName}'. {ex.Message}");
 				return "res";
 			}
 		}
@@ -202,6 +223,7 @@ namespace AutoResxTranslator
 		bool ValidateResxTranslate()
 		{
 			string errors = "";
+			AppLog.Info("ValidateResxTranslate start.");
 
 			if (!File.Exists(txtSourceResx.Text))
 				errors += "Please select source ResX file.\n";
@@ -226,9 +248,11 @@ namespace AutoResxTranslator
 
 			if (errors.Length > 0)
 			{
+				AppLog.Warn("ValidateResxTranslate failed: " + SafeText(errors, 500));
 				MessageBox.Show(errors, "", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return false;
 			}
+			AppLog.Info("ValidateResxTranslate passed.");
 			return true;
 		}
 
@@ -247,6 +271,7 @@ namespace AutoResxTranslator
 			}
 			if (destLanguages.Count == 0)
 			{
+				AppLog.Warn("TranslateResxFiles aborted: destination language list is empty after filtering source language.");
 				MessageBox.Show("The source and the destination languages can not be the same.", "", MessageBoxButtons.OK,
 					MessageBoxIcon.Error);
 				return;
@@ -262,6 +287,11 @@ namespace AutoResxTranslator
 				DeepLSubscriptionRegion = cmbDeeplApiType.SelectedIndex.ToString()
 			};
 
+			AppLog.Info(
+				$"TranslateResxFiles start | service={translationOptions.ServiceType} source='{txtSourceResx.Text}' sourceLng={srcLng} " +
+				$"destCount={destLanguages.Count} translateFromKey={translateFromKey} onlyNew={checkBoxTranslateOnlyNew.Checked} csv={chkCSVOutput.Checked} outputDir='{txtOutputDir.Text}'");
+			AppLog.Info("Destination languages: " + string.Join(", ", destLanguages));
+
 			IsBusy(true);
 			new Action<string, string, TranslationOptions, List<string>, string, ResxProgressCallback, bool, bool, bool, string>(TranslateResxFilesAsync).BeginInvoke(
 				txtSourceResx.Text,
@@ -274,7 +304,11 @@ namespace AutoResxTranslator
 				checkBoxTranslateOnlyNew.Checked,
 				chkCSVOutput.Checked,
 				txtCSVOutputDir.Text,
-				(x) => IsBusy(false),
+				(x) =>
+				{
+					AppLog.Info("TranslateResxFilesAsync delegate callback invoked. Setting IsBusy(false).");
+					IsBusy(false);
+				},
 				null);
 		}
 
@@ -291,116 +325,235 @@ namespace AutoResxTranslator
 			bool generateCsv,
 			string generateCsvDir)
 		{
+			var totalSw = Stopwatch.StartNew();
 			int max = 0;
 			int pos = 0;
 			int trycount = 0;
 			string status = "";
 			bool hasErrors = false;
+			AppLog.Info(
+				$"TranslateResxFilesAsync start | source='{sourceResx}' sourceLng={sourceLng} destDir='{destDir}' " +
+				$"destCount={desLanguages?.Count ?? 0} service={translationOptions.ServiceType} translateFromKey={translateFromKey} onlyNew={translateOnlyNewKeys} csv={generateCsv}");
 
 			var sourceResxFilename = ReadLanguageFilename(sourceResx);
 			var errorLogFilename = sourceResxFilename + ".errors.log";
 			var errorLogFile = Path.Combine(destDir, errorLogFilename);
 
-			foreach (var destLng in desLanguages)
+			try
 			{
-				var destFile = Path.Combine(destDir, sourceResxFilename + "." + destLng + ".resx");
-				var doc = new XmlDocument();
-				doc.Load(sourceResx);
-				var dataList = ResxTranslator.ReadResxData(doc);
-				max = dataList.Count;
-
-				string[] csvOutputDataBuffer = null;
-				if (generateCsv)
-					csvOutputDataBuffer = new string[max];
-
-				List<XmlNode> destinationDataList = null;
-				var destTranslateOnlyNewKeys =
-						translateOnlyNewKeys &&
-						File.Exists(destFile);
-
-				if (destTranslateOnlyNewKeys)
+				foreach (var destLng in desLanguages)
 				{
-					var destDoc = new XmlDocument();
-					destDoc.Load(destFile);
-					destinationDataList = ResxTranslator.ReadResxData(destDoc);
-				}
+					var languageSw = Stopwatch.StartNew();
+					var destFile = Path.Combine(destDir, sourceResxFilename + "." + destLng + ".resx");
+					AppLog.Info($"Language start | target={destLng} destFile='{destFile}'");
 
-				pos = 0;
-				status = "Translating language: " + destLng;
-				progress.BeginInvoke(max, pos, status, null, null);
+					var doc = new XmlDocument();
+					doc.Load(sourceResx);
+					var dataList = ResxTranslator.ReadResxData(doc);
+					max = dataList.Count;
+					AppLog.Info($"Language loaded | target={destLng} totalKeys={max}");
 
-				try
-				{
-					int destIndexCorrection = 0;
-					foreach (var (node, index) in dataList.Select((n, i) => (n, i)))
+					string[] csvOutputDataBuffer = null;
+					if (generateCsv)
+						csvOutputDataBuffer = new string[max];
+
+					List<XmlNode> destinationDataList = null;
+					var destTranslateOnlyNewKeys =
+							translateOnlyNewKeys &&
+							File.Exists(destFile);
+
+					if (destTranslateOnlyNewKeys)
 					{
-						status = "Translating language: " + destLng;
-						pos += 1;
-						progress.BeginInvoke(max, pos, status, null, null);
-						var valueNode = ResxTranslator.GetDataValueNode(node);
-						if (valueNode == null)
-							continue;
+						var destDoc = new XmlDocument();
+						destDoc.Load(destFile);
+						destinationDataList = ResxTranslator.ReadResxData(destDoc);
+						AppLog.Info($"Language existing destination loaded | target={destLng} existingKeys={destinationDataList.Count}");
+					}
 
-						var keyNode = ResxTranslator.GetDataKeyName(node);
-						var orgText = translateFromKey ? keyNode : valueNode.InnerText;
+					pos = 0;
+					status = "Translating language: " + destLng;
+					progress.BeginInvoke(max, pos, status, null, null);
 
-						if (destTranslateOnlyNewKeys)
+					try
+					{
+						int destIndexCorrection = 0;
+						foreach (var (node, index) in dataList.Select((n, i) => (n, i)))
 						{
-							int destIndex = index - destIndexCorrection;
-							var destNode = ResxTranslator.GetDataKeyName(destinationDataList.ElementAt(destIndex));
-							if (destNode == keyNode)
+							var itemSw = Stopwatch.StartNew();
+							status = "Translating language: " + destLng;
+							pos += 1;
+							progress.BeginInvoke(max, pos, status, null, null);
+							var valueNode = ResxTranslator.GetDataValueNode(node);
+							var keyNode = ResxTranslator.GetDataKeyName(node);
+							AppLog.Info($"Key start | target={destLng} index={index + 1}/{max} key='{SafeText(keyNode, 120)}'");
+
+							try
 							{
-								valueNode.InnerText = ResxTranslator.GetDataValueNode(destinationDataList.ElementAt(destIndex)).InnerText;
+								if (valueNode == null)
+								{
+									AppLog.Warn($"Key skipped (no value node) | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}'");
+									continue;
+								}
+
+								var orgText = translateFromKey ? keyNode : valueNode.InnerText;
+
+								if (destTranslateOnlyNewKeys)
+								{
+									int destIndex = index - destIndexCorrection;
+									if (destIndex < 0 || destIndex >= destinationDataList.Count)
+									{
+										AppLog.Warn($"Key only-new index mismatch | target={destLng} index={index + 1} destIndex={destIndex} correction={destIndexCorrection}");
+									}
+									else
+									{
+										var destNode = ResxTranslator.GetDataKeyName(destinationDataList.ElementAt(destIndex));
+										if (destNode == keyNode)
+										{
+											var destValueNode = ResxTranslator.GetDataValueNode(destinationDataList.ElementAt(destIndex));
+											var existingDestinationValue = destValueNode?.InnerText;
+											if (!string.IsNullOrWhiteSpace(existingDestinationValue))
+											{
+												valueNode.InnerText = existingDestinationValue;
+												if (generateCsv)
+													csvOutputDataBuffer[index] = keyNode + "," + valueNode.InnerText;
+
+												AppLog.Info($"Key reused existing translation | target={destLng} index={index + 1} elapsedMs={itemSw.ElapsedMilliseconds}");
+												continue;
+											}
+
+											AppLog.Info($"Key found with empty destination value; translating | target={destLng} index={index + 1}");
+										}
+										else
+										{
+											destIndexCorrection++;
+										}
+									}
+								}
+
+								if (string.IsNullOrWhiteSpace(orgText))
+								{
+									AppLog.Warn($"Key skipped (empty text) | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}'");
+									continue;
+								}
+
+								if (translationOptions.ServiceType == ServiceTypeEnum.Google)
+								{
+									// There is no longer a key to validate
+									// the key
+									var textTranslatorUrlKey = "";
+
+									string translated = string.Empty;
+									bool success = false;
+									trycount = 0;
+									do
+									{
+										try
+										{
+											AppLog.Info($"Google call | target={destLng} index={index + 1} try={trycount + 1}");
+											success = GTranslateService.Translate(orgText, sourceLng, destLng, textTranslatorUrlKey, out translated);
+										}
+										catch (Exception ex)
+										{
+											success = false;
+											AppLog.Error($"Google call exception | target={destLng} index={index + 1} try={trycount + 1}", ex);
+										}
+										trycount++;
+
+										if (!success)
+										{
+											status = "Translating language: " + destLng + " , key '" + keyNode + "' failed to translate in try " + trycount;
+											progress.BeginInvoke(max, pos, status, null, null);
+										}
+
+									} while (success == false && trycount <= 2);
+
+									if (success)
+									{
+										valueNode.InnerText = translated;
+									}
+									else
+									{
+										hasErrors = true;
+										try
+										{
+											string message = "\r\nKey '" + keyNode + "' translation to language '" + destLng + "' failed.";
+											File.AppendAllText(errorLogFile, message);
+										}
+										catch (Exception ex)
+										{
+											AppLog.Error("Failed writing google error log entry.", ex);
+										}
+									}
+								}
+								else if (translationOptions.ServiceType == ServiceTypeEnum.Microsoft)
+								{
+									AppLog.Info($"Microsoft call | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}' textLength={orgText.Length}");
+									var translationResult = await MsTranslateService.TranslateAsync(orgText, sourceLng, destLng,
+										translationOptions.MsSubscriptionKey, translationOptions.MsSubscriptionRegion);
+
+									if (translationResult.Success)
+									{
+										valueNode.InnerText = translationResult.Result;
+									}
+									else
+									{
+										hasErrors = true;
+										var key = ResxTranslator.GetDataKeyName(node);
+										try
+										{
+											string message = "\r\nKey '" + key + "' translation to language '" + destLng + "' failed. ";
+											if (!string.IsNullOrEmpty(translationResult.Result))
+												message += " Error message: " + translationResult.Result;
+
+											File.AppendAllText(errorLogFile, message);
+										}
+										catch (Exception ex)
+										{
+											AppLog.Error("Failed writing microsoft error log entry.", ex);
+										}
+									}
+								}
+								else if (translationOptions.ServiceType == ServiceTypeEnum.DeepL)
+								{
+									AppLog.Info($"DeepL call | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}' textLength={orgText.Length}");
+									var translationResult = await DeepLTranslateService.TranslateAsync(orgText, sourceLng, destLng,
+										translationOptions.DeepLSubscriptionKey, translationOptions.DeepLSubscriptionRegion);
+
+									if (translationResult.Success)
+									{
+										valueNode.InnerText = translationResult.Result;
+									}
+									else
+									{
+										hasErrors = true;
+										var key = ResxTranslator.GetDataKeyName(node);
+										try
+										{
+											string message = "\r\nKey '" + key + "' translation to language '" + destLng + "' failed. ";
+											if (!string.IsNullOrEmpty(translationResult.Result))
+												message += " Error message: " + translationResult.Result;
+
+											File.AppendAllText(errorLogFile, message);
+										}
+										catch (Exception ex)
+										{
+											AppLog.Error("Failed writing DeepL error log entry.", ex);
+										}
+									}
+								}
+
 								if (generateCsv)
 									csvOutputDataBuffer[index] = keyNode + "," + valueNode.InnerText;
-								continue;
+
+								AppLog.Info($"Key done | target={destLng} index={index + 1}/{max} key='{SafeText(keyNode, 120)}' elapsedMs={itemSw.ElapsedMilliseconds}");
 							}
-							else
-								destIndexCorrection++;
-						}
-
-						if (string.IsNullOrWhiteSpace(orgText))
-							continue;
-
-						if (translationOptions.ServiceType == ServiceTypeEnum.Google)
-						{
-							// There is no longer a key to validate
-							// the key
-							var textTranslatorUrlKey = "";
-
-							string translated = string.Empty;
-							bool success = false;
-							trycount = 0;
-							do
-							{
-								try
-								{
-									success = GTranslateService.Translate(orgText, sourceLng, destLng, textTranslatorUrlKey, out translated);
-								}
-								catch (Exception)
-								{
-									success = false;
-								}
-								trycount++;
-
-								if (!success)
-								{
-									status = "Translating language: " + destLng + " , key '" + keyNode + "' failed to translate in try " + trycount;
-									progress.BeginInvoke(max, pos, status, null, null);
-								}
-
-							} while (success == false && trycount <= 2);
-
-							if (success)
-							{
-								valueNode.InnerText = translated;
-							}
-							else
+							catch (Exception ex)
 							{
 								hasErrors = true;
+								AppLog.Error($"Unhandled key exception | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}'", ex);
 								try
 								{
-									string message = "\r\nKey '" + keyNode + "' translation to language '" + destLng + "' failed.";
+									string message = "\r\nKey '" + keyNode + "' translation to language '" + destLng + "' failed by exception: " + ex.Message;
 									File.AppendAllText(errorLogFile, message);
 								}
 								catch
@@ -408,73 +561,33 @@ namespace AutoResxTranslator
 								}
 							}
 						}
-						else if (translationOptions.ServiceType == ServiceTypeEnum.Microsoft)
-						{
-							var translationResult = await MsTranslateService.TranslateAsync(orgText, sourceLng, destLng,
-								translationOptions.MsSubscriptionKey, translationOptions.MsSubscriptionRegion);
-
-							if (translationResult.Success)
-							{
-								valueNode.InnerText = translationResult.Result;
-							}
-							else
-							{
-								hasErrors = true;
-								var key = ResxTranslator.GetDataKeyName(node);
-								try
-								{
-									string message = "\r\nKey '" + key + "' translation to language '" + destLng + "' failed. ";
-									if (!string.IsNullOrEmpty(translationResult.Result))
-										message += " Error message: " + translationResult.Result;
-
-									File.AppendAllText(errorLogFile, message);
-								}
-								catch { }
-							}
-						}
-						else if (translationOptions.ServiceType == ServiceTypeEnum.DeepL)
-						{
-							var translationResult = await DeepLTranslateService.TranslateAsync(orgText, sourceLng, destLng,
-								translationOptions.DeepLSubscriptionKey, translationOptions.DeepLSubscriptionRegion);
-
-							if (translationResult.Success)
-							{
-								valueNode.InnerText = translationResult.Result;
-							}
-							else
-							{
-								hasErrors = true;
-								var key = ResxTranslator.GetDataKeyName(node);
-								try
-								{
-									string message = "\r\nKey '" + key + "' translation to language '" + destLng + "' failed. ";
-									if (!string.IsNullOrEmpty(translationResult.Result))
-										message += " Error message: " + translationResult.Result;
-
-									File.AppendAllText(errorLogFile, message);
-								}
-								catch { }
-							}
-						}
-						if (generateCsv)
-							csvOutputDataBuffer[index] = keyNode + "," + valueNode.InnerText;
 					}
-				}
-				finally
-				{
-					// now save the data!
-					doc.Save(destFile);
-
-					if (generateCsv)
+					finally
 					{
-						if (!Directory.Exists(generateCsvDir))
-							Directory.CreateDirectory(generateCsvDir);
-						var csvFile = Path.Combine(generateCsvDir, sourceResxFilename + "." + destLng + ".resx.csv");
+						// now save the data!
+						doc.Save(destFile);
+						AppLog.Info($"Language file saved | target={destLng} file='{destFile}'");
 
-						File.WriteAllLines(csvFile, new string[] { "KEY,Value" }, Encoding.UTF8);
-						File.AppendAllLines(csvFile, csvOutputDataBuffer, Encoding.UTF8);
+						if (generateCsv)
+						{
+							if (!Directory.Exists(generateCsvDir))
+								Directory.CreateDirectory(generateCsvDir);
+							var csvFile = Path.Combine(generateCsvDir, sourceResxFilename + "." + destLng + ".resx.csv");
+
+							File.WriteAllLines(csvFile, new string[] { "KEY,Value" }, Encoding.UTF8);
+							File.AppendAllLines(csvFile, csvOutputDataBuffer, Encoding.UTF8);
+							AppLog.Info($"Language CSV saved | target={destLng} file='{csvFile}'");
+						}
+
+						AppLog.Info($"Language done | target={destLng} elapsedMs={languageSw.ElapsedMilliseconds}");
 					}
 				}
+			}
+			catch (Exception ex)
+			{
+				hasErrors = true;
+				status = "Translation failed by unhandled exception. Check log file.";
+				AppLog.Error("TranslateResxFilesAsync unhandled exception.", ex);
 			}
 
 			if (hasErrors)
@@ -486,6 +599,7 @@ namespace AutoResxTranslator
 				status = "Translation finished.";
 			}
 
+			AppLog.Info($"TranslateResxFilesAsync done | hasErrors={hasErrors} elapsedMs={totalSw.ElapsedMilliseconds}");
 
 			progress.BeginInvoke(max, pos, status, null, null);
 
@@ -493,6 +607,12 @@ namespace AutoResxTranslator
 
 		void ResxWorkingProgress(int max, int pos, string status)
 		{
+			if ((DateTime.UtcNow - _lastProgressLogUtc).TotalSeconds >= 5 || pos == max)
+			{
+				_lastProgressLogUtc = DateTime.UtcNow;
+				AppLog.Info($"Progress update | max={max} pos={pos} status='{SafeText(status, 220)}'");
+			}
+
 			if (this.InvokeRequired)
 			{
 				this.BeginInvoke(new ResxProgressCallback(ResxWorkingProgress), max, pos, status);
@@ -516,6 +636,7 @@ namespace AutoResxTranslator
 			var sheetKeyColumn = cmbExcelKey.Text;
 			var sheetTranslation = cmbExcelTranslation.Text;
 			var create = chkExcelCreateAbsent.Checked;
+			AppLog.Info($"ImportExcel start | excel='{excelFile}' resx='{resxFile}' sheet='{sheetName}' keyCol='{sheetKeyColumn}' valueCol='{sheetTranslation}' create={create}");
 
 			IsBusy(true);
 			new Action<string, string, string, string, string, bool>(ImportExcel).BeginInvoke(
@@ -532,6 +653,7 @@ namespace AutoResxTranslator
 		private void ImportExcel(string excelFile, string resxFile, string sheetName, string sheetKeyColumn,
 			string sheetTranslation, bool create)
 		{
+			var sw = Stopwatch.StartNew();
 			var doc = new XmlDocument();
 			doc.Load(resxFile);
 			var dataList = ResxTranslator.ReadResxData(doc);
@@ -556,6 +678,7 @@ namespace AutoResxTranslator
 			};
 			doc.Save(writer);
 			writer.Close();
+			AppLog.Info($"ImportExcel done | elapsedMs={sw.ElapsedMilliseconds}");
 		}
 
 		bool IsGoogleTranslatorLoaded()
@@ -566,29 +689,35 @@ namespace AutoResxTranslator
 			{
 				return true;
 			}
+			AppLog.Warn("Google translator browser not loaded.");
 			return false;
 		}
 
 		private void frmMain_Load(object sender, EventArgs e)
 		{
+			AppLog.Info("frmMain_Load start.");
 			FillComboBoxes();
 			txtMsTranslationKey.Text = Properties.Settings.Default.MicrosoftTranslatorKey;
 			txtMsTranslationRegion.Text = Properties.Settings.Default.MicrosoftTranslatorRegion;
 			txtDeepLTranslationKey.Text = Properties.Settings.Default.DeepLTranslatorKey;
 			cmbDeeplApiType.SelectedIndex = Properties.Settings.Default.DeepLTranslatorType;
 			tabMain.TabPages.Remove(tabBrowser);
+			AppLog.Info($"frmMain_Load done. Log file: '{AppLog.CurrentLogFilePath}'");
 		}
 
 		private async void btnTranslate_ClickAsync(object sender, EventArgs e)
 		{
+			AppLog.Info("btnTranslate_ClickAsync triggered.");
 
 			if (cmbDesc.SelectedIndex == -1 || cmbSrc.SelectedIndex == -1)
 			{
+				AppLog.Warn("Manual translate blocked: source/destination language not selected.");
 				MessageBox.Show("Please select source and destination languages correctly.", "", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
 			if (txtSrc.Text.Length == 0)
 			{
+				AppLog.Warn("Manual translate blocked: input text empty.");
 				MessageBox.Show("The text body can not be empty.", "", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
@@ -596,6 +725,7 @@ namespace AutoResxTranslator
 			var lngSrc = ((KeyValuePair<string, string>)cmbSrc.SelectedItem).Key;
 			var lngDest = ((KeyValuePair<string, string>)cmbDesc.SelectedItem).Key;
 			var text = txtSrc.Text;
+			AppLog.Info($"Manual translate start | service={ServiceType} from={lngSrc} to={lngDest} chars={text.Length}");
 
 			var translationOptions = new TranslationOptions
 			{
@@ -618,6 +748,7 @@ namespace AutoResxTranslator
 				text, lngSrc, lngDest, textTranslatorUrlKey,
 				(success, result) =>
 				{
+					AppLog.Info($"Manual google callback | success={success} resultLength={result?.Length ?? 0}");
 					SetResult(result);
 					IsBusy(false);
 				});
@@ -625,6 +756,7 @@ namespace AutoResxTranslator
 			else if (ServiceType == ServiceTypeEnum.Microsoft)
 			{
 				var translationResult = await MsTranslateService.TranslateAsync(text, lngSrc, lngDest, txtMsTranslationKey.Text, txtMsTranslationRegion.Text);
+				AppLog.Info($"Manual MS result | success={translationResult.Success} resultLength={translationResult.Result?.Length ?? 0}");
 
 				if (translationResult.Success)
 				{
@@ -643,6 +775,7 @@ namespace AutoResxTranslator
 			else
 			{
 				var translationResult = await DeepLTranslateService.TranslateAsync(text, lngSrc, lngDest, txtDeepLTranslationKey.Text, cmbDeeplApiType.SelectedIndex.ToString());
+				AppLog.Info($"Manual DeepL result | success={translationResult.Success} resultLength={translationResult.Result?.Length ?? 0}");
 
 				if (translationResult.Success)
 				{
@@ -662,11 +795,13 @@ namespace AutoResxTranslator
 
 		private void btnSelectResxSource_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnSelectResxSource_Click triggered.");
 			var dlg = new OpenFileDialog();
 			dlg.Filter = "ResourceX File|*.resx";
 			if (dlg.ShowDialog() == DialogResult.OK)
 			{
 				txtSourceResx.Text = dlg.FileName;
+				AppLog.Info($"Source resx selected: '{txtSourceResx.Text}'");
 				if (txtOutputDir.Text.Length == 0)
 				{
 					txtOutputDir.Text = Path.GetDirectoryName(txtSourceResx.Text);
@@ -681,6 +816,7 @@ namespace AutoResxTranslator
 
 				// select based on what is in destination
 				string[] languageFilesInDir = Directory.GetFiles(Path.GetDirectoryName(txtSourceResx.Text), "*.resx");
+				AppLog.Info($"Detected {languageFilesInDir.Length} resx files in source directory.");
 
 				foreach (var lngFile in languageFilesInDir)
 				{
@@ -690,11 +826,16 @@ namespace AutoResxTranslator
 
 					var haskey = _languages.FirstOrDefault(x => x.Key.Equals(languageTag, StringComparison.InvariantCultureIgnoreCase));
 					if (string.IsNullOrEmpty(haskey.Key))
+					{
+						AppLog.Warn($"Language tag '{languageTag}' from file '{lngFile}' not found in supported language list.");
 						continue;
+					}
 
 					int index = lstResxLanguages.Items.IndexOfKey(haskey.Key);
 					if (index >= 0)
 						lstResxLanguages.Items[index].Checked = true;
+					else
+						AppLog.Warn($"Language '{haskey.Key}' not found in list view keys.");
 				}
 
 				var lng = ReadLanguageName(txtSourceResx.Text);
@@ -713,6 +854,7 @@ namespace AutoResxTranslator
 
 		private void btnSelectOutputDir_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnSelectOutputDir_Click triggered.");
 			var dlg = new FolderBrowserDialog();
 			dlg.ShowNewFolderButton = true;
 			// Remove dialog open directly without selected directory --> dlg.RootFolder = Environment.SpecialFolder.MyComputer;
@@ -723,16 +865,19 @@ namespace AutoResxTranslator
 			if (dlg.ShowDialog() == DialogResult.OK)
 			{
 				txtOutputDir.Text = dlg.SelectedPath;
+				AppLog.Info($"Output directory selected: '{txtOutputDir.Text}'");
 			}
 		}
 
 
 		private void btnStartResxTranslate_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnStartResxTranslate_Click triggered.");
 			if (!ValidateResxTranslate())
 				return;
 			if (ServiceType == ServiceTypeEnum.Google && !IsGoogleTranslatorLoaded())
 			{
+				AppLog.Warn("Resx translate blocked: Google translator not loaded.");
 				MessageBox.Show("Google Translator is not loaded.", "", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
@@ -750,8 +895,10 @@ namespace AutoResxTranslator
 
 		private void btnOpenExcel_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnOpenExcel_Click triggered.");
 			if (!File.Exists(txtExcelFile.Text))
 			{
+				AppLog.Warn($"OpenExcel blocked: file not found '{txtExcelFile.Text}'");
 				MessageBox.Show("Please select an excel file.", "Excel", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
@@ -759,6 +906,7 @@ namespace AutoResxTranslator
 			var excel = ResxExcel.ReadExcel(txtExcelFile.Text);
 			if (excel == null)
 			{
+				AppLog.Warn("OpenExcel failed: excel parser returned null.");
 				MessageBox.Show("Failed to read excel file", "Excel", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
@@ -770,10 +918,12 @@ namespace AutoResxTranslator
 				cmbExcelKey.SelectedIndex = Array.IndexOf(excel.SheetColumnsKey, "Name");
 			}
 			btnImportExcel.Enabled = true;
+			AppLog.Info("Excel loaded successfully and import enabled.");
 		}
 
 		private void btnSelectExcel_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnSelectExcel_Click triggered.");
 			var dlg = new OpenFileDialog
 			{
 				Filter = "Excel File|*.xls;xlsx"
@@ -781,11 +931,13 @@ namespace AutoResxTranslator
 			if (dlg.ShowDialog() == DialogResult.OK)
 			{
 				txtExcelFile.Text = dlg.FileName;
+				AppLog.Info($"Excel selected: '{txtExcelFile.Text}'");
 			}
 		}
 
 		private void btnExcelResx_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnExcelResx_Click triggered.");
 			var dlg = new OpenFileDialog
 			{
 				Filter = "ResourceX File|*.resx"
@@ -793,15 +945,18 @@ namespace AutoResxTranslator
 			if (dlg.ShowDialog() == DialogResult.OK)
 			{
 				txtExcelResx.Text = dlg.FileName;
+				AppLog.Info($"Excel target resx selected: '{txtExcelResx.Text}'");
 			}
 		}
 
 		private void cmbExcelSheets_SelectedIndexChanged(object sender, EventArgs e)
 		{
+			AppLog.Info($"cmbExcelSheets_SelectedIndexChanged | selected='{cmbExcelSheets.Text}'");
 			if (string.IsNullOrWhiteSpace(txtExcelFile.Text))
 				return;
 			if (!File.Exists(txtExcelFile.Text))
 			{
+				AppLog.Warn($"Excel sheet change blocked: file not found '{txtExcelFile.Text}'");
 				MessageBox.Show("Please select an excel file.", "Select Resx", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
@@ -821,13 +976,16 @@ namespace AutoResxTranslator
 
 		private void btnImportExcel_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnImportExcel_Click triggered.");
 			if (!File.Exists(txtExcelResx.Text))
 			{
+				AppLog.Warn($"ImportExcel blocked: resx file not found '{txtExcelResx.Text}'");
 				MessageBox.Show("Please select ResX file.", "Select Resx", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
 			if (!File.Exists(txtExcelFile.Text))
 			{
+				AppLog.Warn($"ImportExcel blocked: excel file not found '{txtExcelFile.Text}'");
 				MessageBox.Show("Please select an excel file.", "Select Resx", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
@@ -838,6 +996,7 @@ namespace AutoResxTranslator
 			}
 			if (cmbExcelKey.SelectedIndex == -1 || cmbExcelSheets.SelectedIndex == -1 || cmbExcelTranslation.SelectedIndex == -1)
 			{
+				AppLog.Warn("ImportExcel blocked: columns/sheet not selected.");
 				MessageBox.Show("Please select excel columns.", "Select Columns", MessageBoxButtons.OK, MessageBoxIcon.Error);
 				return;
 			}
@@ -847,6 +1006,7 @@ namespace AutoResxTranslator
 
 		private void webBrowser_DocumentCompleted(object sender, WebBrowserDocumentCompletedEventArgs e)
 		{
+			AppLog.Info($"webBrowser_DocumentCompleted: {e.Url}");
 			var doc = webBrowser.Document;
 			if (doc == null)
 				return;
@@ -860,20 +1020,24 @@ namespace AutoResxTranslator
 		{
 			txtMsTranslationKey.Enabled = rbtnMsTranslateService.Checked;
 			txtMsTranslationRegion.Enabled = rbtnMsTranslateService.Checked;
+			AppLog.Info($"RbtnMsTranslateService_CheckedChanged: enabled={rbtnMsTranslateService.Checked}");
 		}
 		private void rbtnDeepLTranslateService_CheckedChanged(object sender, EventArgs e)
 		{
 			txtDeepLTranslationKey.Enabled = rbtnDeepLTranslateService.Checked;
 			cmbDeeplApiType.Enabled = rbtnDeepLTranslateService.Checked;
+			AppLog.Info($"rbtnDeepLTranslateService_CheckedChanged: enabled={rbtnDeepLTranslateService.Checked} apiTypeIndex={cmbDeeplApiType.SelectedIndex}");
 		}
 
 		private void chkCSVOutput_CheckedChanged(object sender, EventArgs e)
 		{
 			txtCSVOutputDir.Enabled = btnSelectCSVOutputDir.Enabled = chkCSVOutput.Checked;
+			AppLog.Info($"chkCSVOutput_CheckedChanged: checked={chkCSVOutput.Checked}");
 		}
 
 		private void btnSelectCSVOutputDir_Click(object sender, EventArgs e)
 		{
+			AppLog.Info("btnSelectCSVOutputDir_Click triggered.");
 			var dlg = new FolderBrowserDialog
 			{
 				ShowNewFolderButton = true,
@@ -886,12 +1050,14 @@ namespace AutoResxTranslator
 			if (dlg.ShowDialog() == DialogResult.OK)
 			{
 				txtCSVOutputDir.Text = dlg.SelectedPath;
+				AppLog.Info($"CSV output directory selected: '{txtCSVOutputDir.Text}'");
 			}
 		}
 
 		private void tabMain_Selected(object sender, TabControlEventArgs e)
 		{
 			var s = (TabControl)sender;
+			AppLog.Info($"tabMain_Selected: selectedTab='{s.SelectedTab?.Name}'");
 			if (_translateSettingsChanged)
 			{
 				Properties.Settings.Default.MicrosoftTranslatorKey = txtMsTranslationKey.Text;
@@ -899,9 +1065,11 @@ namespace AutoResxTranslator
 				Properties.Settings.Default.DeepLTranslatorKey = txtDeepLTranslationKey.Text;
 				Properties.Settings.Default.DeepLTranslatorType = (short)cmbDeeplApiType.SelectedIndex;
 				Properties.Settings.Default.Save();
+				AppLog.Info("Translation settings saved.");
 				_translateSettingsChanged = false;
 			}
 			_translateSettingsChanged = s.SelectedTab.Name == "tabTranslateServices";
+			AppLog.Info($"_translateSettingsChanged={_translateSettingsChanged}");
 		}
 	}
 }

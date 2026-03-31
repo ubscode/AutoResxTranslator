@@ -12,7 +12,7 @@ using System.Runtime.InteropServices;
  * Mozilla Public License v2
  */
 
-[assembly: AssemblyTitle("Auto Resource Translator")]
+[assembly: AssemblyTitle("Auto Resource Translator (fork by United Barcode Systems)")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("Salar Khalilzadeh")]

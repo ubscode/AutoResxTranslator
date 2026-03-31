@@ -1,7 +1,8 @@
-﻿using AutoResxTranslator.Definitions;
+using AutoResxTranslator.Definitions;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -65,6 +66,7 @@ namespace AutoResxTranslator
 			string subscriptionKey,
 			string region)
 		{
+			var sw = Stopwatch.StartNew();
 			if (fromLanguage.Equals("auto"))
 			{
 				fromLanguage = "";
@@ -74,9 +76,11 @@ namespace AutoResxTranslator
 
 			try
 			{
+				AppLog.Info($"DeepL request start | from={fromLanguage ?? "auto"} to={toLanguage} chars={text?.Length ?? 0} regionType={region}");
 				using (var client = new HttpClient())
 				using (var request = new HttpRequestMessage())
 				{
+					client.Timeout = TimeSpan.FromSeconds(60);
 					client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 					client.DefaultRequestHeaders.TryAddWithoutValidation("Content-Type", "application/x-www-form-urlencoded");
 					// Build the request.
@@ -94,6 +98,7 @@ namespace AutoResxTranslator
 					var response = await client.PostAsync(
 						(region == "0" ? DeepLFreeCognitiveServicesApiUrl : DeepLProCognitiveServicesApiUrl) + route,
 							new FormUrlEncodedContent(data));
+					AppLog.Info($"DeepL response | status={(int)response.StatusCode} {response.ReasonPhrase} | elapsedMs={sw.ElapsedMilliseconds}");
 					response.EnsureSuccessStatusCode();
 
 					if (response.StatusCode == HttpStatusCode.OK)
@@ -105,18 +110,23 @@ namespace AutoResxTranslator
 						// Iterate over the results, return the first result
 						foreach (var t in deserializedOutput.Translations)
 						{
+							AppLog.Info($"DeepL translation success | elapsedMs={sw.ElapsedMilliseconds}");
 							return new ResultHolder<string>(true, t.Text);
 						}
 					}
 					else
 					{
+						AppLog.Warn($"DeepL translation failed by status | elapsedMs={sw.ElapsedMilliseconds}");
 						return new ResultHolder<string>(false, "Translation failed! Reason: " + response.ReasonPhrase);
 					}
 				}
+
+				AppLog.Warn($"DeepL translation returned no results | elapsedMs={sw.ElapsedMilliseconds}");
 				return new ResultHolder<string>(false);
 			}
 			catch (Exception e)
 			{
+				AppLog.Error($"DeepL translation exception | elapsedMs={sw.ElapsedMilliseconds}", e);
 				return new ResultHolder<string>(false, "Translation failed! Exception: " + e.Message);
 			}
 		}
