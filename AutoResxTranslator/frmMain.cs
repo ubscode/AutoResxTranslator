@@ -853,6 +853,8 @@ namespace AutoResxTranslator
 									continue;
 								}
 
+								valueNode.InnerText = string.Empty;
+
 								if (translationOptions.ServiceType == ServiceTypeEnum.Google)
 								{
 									// There is no longer a key to validate
