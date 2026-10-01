@@ -716,6 +716,7 @@ namespace AutoResxTranslator
 			var sourceResx = txtSourceResx.Text;
 			var destDir = txtOutputDir.Text;
 			var onlyNew = checkBoxTranslateOnlyNew.Checked;
+			var waitOnGoogle429 = chkWaitOnGoogle429.Checked;
 			var generateCsv = chkCSVOutput.Checked;
 			var csvDir = txtCSVOutputDir.Text;
 			var cancellation = new CancellationTokenSource();
@@ -732,7 +733,7 @@ namespace AutoResxTranslator
 			{
 				lblResxTranslateStatus.Text = await Task.Run(() => TranslateResxFilesAsync(sourceResx, srcLng, translationOptions,
 					destLanguages, destDir, reportProgress, translateFromKey, onlyNew,
-					generateCsv, csvDir, cancellation.Token));
+					generateCsv, csvDir, waitOnGoogle429, cancellation.Token));
 			}
 			finally
 			{
@@ -762,6 +763,7 @@ namespace AutoResxTranslator
 			bool translateOnlyNewKeys,
 			bool generateCsv,
 			string generateCsvDir,
+			bool waitOnGoogle429,
 			CancellationToken cancellationToken)
 		{
 			var totalSw = Stopwatch.StartNew();
@@ -889,17 +891,30 @@ namespace AutoResxTranslator
 									string translated = string.Empty;
 									bool success = false;
 									trycount = 0;
+									int rateLimitWaitSeconds = 60;
 									do
 									{
+										TimeSpan? retryAfter = null;
 										try
 										{
 											AppLog.Info($"Google call | target={destLng} index={index + 1} try={trycount + 1}");
-											success = GTranslateService.Translate(orgText, sourceLng, destLng, textTranslatorUrlKey, out translated, cancellationToken);
+											success = GTranslateService.Translate(orgText, sourceLng, destLng, textTranslatorUrlKey, out translated, out retryAfter, cancellationToken);
 										}
 										catch (Exception ex)
 										{
 											success = false;
 											AppLog.Error($"Google call exception | target={destLng} index={index + 1} try={trycount + 1}", ex);
+										}
+										cancellationToken.ThrowIfCancellationRequested();
+										if (!success && waitOnGoogle429 && retryAfter.HasValue)
+										{
+											var delay = retryAfter.Value > TimeSpan.Zero ? retryAfter.Value : TimeSpan.FromSeconds(rateLimitWaitSeconds);
+											status = $"Google rate limit (429). Retrying key '{keyNode}' in {Math.Ceiling(delay.TotalSeconds):0} seconds...";
+											progress(max, pos, status);
+											AppLog.Warn($"Google 429 wait | target={destLng} index={index + 1} delay={delay}");
+											await Task.Delay(delay, cancellationToken);
+											rateLimitWaitSeconds = Math.Min(rateLimitWaitSeconds * 2, 300);
+											continue;
 										}
 										trycount++;
 

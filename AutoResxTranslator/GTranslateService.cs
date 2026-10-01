@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Web;
 using System.Threading;
+using System.Globalization;
 
 /* 
  * AutoResxTranslator
@@ -44,6 +45,20 @@ namespace AutoResxTranslator
 			out string result,
 			CancellationToken cancellationToken = default(CancellationToken))
 		{
+			TimeSpan? retryAfter;
+			return Translate(text, sourceLng, destLng, textTranslatorUrlKey, out result, out retryAfter, cancellationToken);
+		}
+
+		public static bool Translate(
+			string text,
+			string sourceLng,
+			string destLng,
+			string textTranslatorUrlKey,
+			out string result,
+			out TimeSpan? retryAfter,
+			CancellationToken cancellationToken = default(CancellationToken))
+		{
+			retryAfter = null;
 			var sw = Stopwatch.StartNew();
 			AppLog.Info($"Google request start | from={sourceLng} to={destLng} chars={text?.Length ?? 0}");
 			var request = CreateWebRequest(text, sourceLng, destLng, textTranslatorUrlKey);
@@ -52,21 +67,27 @@ namespace AutoResxTranslator
 				using (cancellationToken.Register(() => request.Abort()))
 				using (var response = (HttpWebResponse)request.GetResponse())
 				{
+					if (response.StatusCode != HttpStatusCode.OK)
+					{
+						result = "Response is failed with code: " + response.StatusCode;
+						return false;
+					}
 
-				if (response.StatusCode != HttpStatusCode.OK)
-				{
-					result = "Response is failed with code: " + response.StatusCode;
-					return false;
+					using (var stream = response.GetResponseStream())
+					{
+						var succeed = ReadGoogleTranslatedResult(stream, out var output);
+						result = output;
+						AppLog.Info($"Google request done | success={succeed} | elapsedMs={sw.ElapsedMilliseconds}");
+						return succeed;
+					}
 				}
-
-				using (var stream = response.GetResponseStream())
-				{
-					var succeed = ReadGoogleTranslatedResult(stream, out var output);
-					result = output;
-					AppLog.Info($"Google request done | success={succeed} | elapsedMs={sw.ElapsedMilliseconds}");
-					return succeed;
-				}
-				}
+			}
+			catch (WebException ex) when (ex.Response is HttpWebResponse response && (int)response.StatusCode == 429)
+			{
+				retryAfter = ParseRetryAfter(response.Headers[HttpResponseHeader.RetryAfter]);
+				AppLog.Warn($"Google rate limit | elapsedMs={sw.ElapsedMilliseconds} retryAfter={retryAfter}");
+				result = ex.Message;
+				return false;
 			}
 			catch (Exception ex)
 			{
@@ -74,6 +95,16 @@ namespace AutoResxTranslator
 				result = ex.Message;
 				return false;
 			}
+		}
+
+		private static TimeSpan ParseRetryAfter(string value)
+		{
+			if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) && seconds >= 0)
+				return TimeSpan.FromSeconds(seconds);
+			if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
+				DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var date))
+				return date > DateTimeOffset.UtcNow ? date - DateTimeOffset.UtcNow : TimeSpan.Zero;
+			return TimeSpan.Zero;
 		}
 
 		static WebRequest CreateWebRequest(
