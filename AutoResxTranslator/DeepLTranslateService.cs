@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace AutoResxTranslator
 {
@@ -64,7 +65,8 @@ namespace AutoResxTranslator
 			string fromLanguage,
 			string toLanguage,
 			string subscriptionKey,
-			string region)
+			string region,
+			CancellationToken cancellationToken = default(CancellationToken))
 		{
 			var sw = Stopwatch.StartNew();
 			if (fromLanguage.Equals("auto"))
@@ -97,7 +99,7 @@ namespace AutoResxTranslator
 					
 					var response = await client.PostAsync(
 						(region == "0" ? DeepLFreeCognitiveServicesApiUrl : DeepLProCognitiveServicesApiUrl) + route,
-							new FormUrlEncodedContent(data));
+							new FormUrlEncodedContent(data), cancellationToken);
 					AppLog.Info($"DeepL response | status={(int)response.StatusCode} {response.ReasonPhrase} | elapsedMs={sw.ElapsedMilliseconds}");
 					response.EnsureSuccessStatusCode();
 
@@ -123,6 +125,10 @@ namespace AutoResxTranslator
 
 				AppLog.Warn($"DeepL translation returned no results | elapsedMs={sw.ElapsedMilliseconds}");
 				return new ResultHolder<string>(false);
+			}
+			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+			{
+				throw;
 			}
 			catch (Exception e)
 			{

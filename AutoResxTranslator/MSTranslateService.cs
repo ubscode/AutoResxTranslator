@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace AutoResxTranslator
 {
@@ -21,7 +22,8 @@ namespace AutoResxTranslator
 			string fromLanguage,
 			string toLanguage,
 			string subscriptionKey,
-			string region)
+			string region,
+			CancellationToken cancellationToken = default(CancellationToken))
 		{
 			var sw = Stopwatch.StartNew();
 
@@ -56,7 +58,7 @@ namespace AutoResxTranslator
 					request.Version = new Version("1.1");
 
 					// Send the request and get response.
-					var response = await client.SendAsync(request).ConfigureAwait(false);
+					var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
 					AppLog.Info($"MS response | status={(int)response.StatusCode} {response.ReasonPhrase} | elapsedMs={sw.ElapsedMilliseconds}");
 
 					if (response.StatusCode == System.Net.HttpStatusCode.OK)
@@ -86,6 +88,10 @@ namespace AutoResxTranslator
 
 				AppLog.Warn($"MS translation returned no results | elapsedMs={sw.ElapsedMilliseconds}");
 				return new ResultHolder<string>(false);
+			}
+			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+			{
+				throw;
 			}
 			catch (Exception e)
 			{

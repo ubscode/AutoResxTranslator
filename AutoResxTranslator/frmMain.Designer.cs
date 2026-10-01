@@ -54,6 +54,7 @@
             this.lstResxLanguages = new System.Windows.Forms.ListView();
             this.lblResxTranslateStatus = new System.Windows.Forms.Label();
             this.btnStartResxTranslate = new System.Windows.Forms.Button();
+            this.btnCancelResxTranslate = new System.Windows.Forms.Button();
             this.barResxProgress = new System.Windows.Forms.ProgressBar();
             this.label6 = new System.Windows.Forms.Label();
             this.btnSelectOutputDir = new System.Windows.Forms.Button();
@@ -273,6 +274,7 @@
             this.tabResx.Controls.Add(this.lstResxLanguages);
             this.tabResx.Controls.Add(this.lblResxTranslateStatus);
             this.tabResx.Controls.Add(this.btnStartResxTranslate);
+            this.tabResx.Controls.Add(this.btnCancelResxTranslate);
             this.tabResx.Controls.Add(this.barResxProgress);
             this.tabResx.Controls.Add(this.label6);
             this.tabResx.Controls.Add(this.btnSelectOutputDir);
@@ -395,6 +397,18 @@
             this.btnStartResxTranslate.Text = "Translate";
             this.btnStartResxTranslate.UseVisualStyleBackColor = true;
             this.btnStartResxTranslate.Click += new System.EventHandler(this.btnStartResxTranslate_Click);
+            //
+            // btnCancelResxTranslate
+            //
+            this.btnCancelResxTranslate.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnCancelResxTranslate.Enabled = false;
+            this.btnCancelResxTranslate.Location = new System.Drawing.Point(493, 306);
+            this.btnCancelResxTranslate.Name = "btnCancelResxTranslate";
+            this.btnCancelResxTranslate.Size = new System.Drawing.Size(75, 23);
+            this.btnCancelResxTranslate.TabIndex = 19;
+            this.btnCancelResxTranslate.Text = "Cancel";
+            this.btnCancelResxTranslate.UseVisualStyleBackColor = true;
+            this.btnCancelResxTranslate.Click += new System.EventHandler(this.btnCancelResxTranslate_Click);
             // 
             // barResxProgress
             // 
@@ -402,7 +416,7 @@
             | System.Windows.Forms.AnchorStyles.Right)));
             this.barResxProgress.Location = new System.Drawing.Point(113, 306);
             this.barResxProgress.Name = "barResxProgress";
-            this.barResxProgress.Size = new System.Drawing.Size(454, 23);
+            this.barResxProgress.Size = new System.Drawing.Size(374, 23);
             this.barResxProgress.TabIndex = 9;
             // 
             // label6
@@ -906,6 +920,7 @@
 		private System.Windows.Forms.Label label6;
 		private System.Windows.Forms.Label lblResxTranslateStatus;
 		private System.Windows.Forms.Button btnStartResxTranslate;
+		private System.Windows.Forms.Button btnCancelResxTranslate;
 		private System.Windows.Forms.ProgressBar barResxProgress;
 		private System.Windows.Forms.ListView lstResxLanguages;
 		private System.Windows.Forms.LinkLabel lnkAbout;

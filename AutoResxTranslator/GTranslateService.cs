@@ -5,6 +5,7 @@ using System.Net;
 using System.Diagnostics;
 using System.Text;
 using System.Web;
+using System.Threading;
 
 /* 
  * AutoResxTranslator
@@ -40,14 +41,17 @@ namespace AutoResxTranslator
 			string sourceLng,
 			string destLng,
 			string textTranslatorUrlKey,
-			out string result)
+			out string result,
+			CancellationToken cancellationToken = default(CancellationToken))
 		{
 			var sw = Stopwatch.StartNew();
 			AppLog.Info($"Google request start | from={sourceLng} to={destLng} chars={text?.Length ?? 0}");
 			var request = CreateWebRequest(text, sourceLng, destLng, textTranslatorUrlKey);
 			try
 			{
-				var response = (HttpWebResponse)request.GetResponse();
+				using (cancellationToken.Register(() => request.Abort()))
+				using (var response = (HttpWebResponse)request.GetResponse())
+				{
 
 				if (response.StatusCode != HttpStatusCode.OK)
 				{
@@ -61,6 +65,7 @@ namespace AutoResxTranslator
 					result = output;
 					AppLog.Info($"Google request done | success={succeed} | elapsedMs={sw.ElapsedMilliseconds}");
 					return succeed;
+				}
 				}
 			}
 			catch (Exception ex)

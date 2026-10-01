@@ -6,6 +6,8 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Reflection;
@@ -105,6 +107,7 @@ namespace AutoResxTranslator
 				{"yi", "Yiddish"}
 			};
 		private bool _translateSettingsChanged;
+		private CancellationTokenSource _resxCancellation;
 		private DateTime _lastProgressLogUtc = DateTime.MinValue;
 		private bool _ubsThemeApplied;
 		private readonly HashSet<Button> _styledButtons = new HashSet<Button>();
@@ -186,6 +189,7 @@ namespace AutoResxTranslator
 			txtExcelResx.BackColor = Color.FromArgb(239, 244, 251);
 			StyleButton(btnTranslate, true);
 			StyleButton(btnStartResxTranslate, true);
+			StyleButton(btnCancelResxTranslate, false);
 			StyleButton(btnImportExcel, true);
 
 			lnkAbout.LinkColor = _ubsAccent;
@@ -674,7 +678,7 @@ namespace AutoResxTranslator
 		}
 
 
-		void TranslateResxFiles()
+		async void TranslateResxFiles()
 		{
 			var srcLng = ((KeyValuePair<string, string>)cmbSourceResxLng.SelectedItem).Key;
 			var destLanguages = new List<string>();
@@ -709,29 +713,46 @@ namespace AutoResxTranslator
 				$"destCount={destLanguages.Count} translateFromKey={translateFromKey} onlyNew={checkBoxTranslateOnlyNew.Checked} csv={chkCSVOutput.Checked} outputDir='{txtOutputDir.Text}'");
 			AppLog.Info("Destination languages: " + string.Join(", ", destLanguages));
 
-			IsBusy(true);
-			new Action<string, string, TranslationOptions, List<string>, string, ResxProgressCallback, bool, bool, bool, string>(TranslateResxFilesAsync).BeginInvoke(
-				txtSourceResx.Text,
-				srcLng,
-				translationOptions,
-				destLanguages,
-				txtOutputDir.Text,
-				ResxWorkingProgress,
-				translateFromKey,
-				checkBoxTranslateOnlyNew.Checked,
-				chkCSVOutput.Checked,
-				txtCSVOutputDir.Text,
-				(x) =>
+			var sourceResx = txtSourceResx.Text;
+			var destDir = txtOutputDir.Text;
+			var onlyNew = checkBoxTranslateOnlyNew.Checked;
+			var generateCsv = chkCSVOutput.Checked;
+			var csvDir = txtCSVOutputDir.Text;
+			var cancellation = new CancellationTokenSource();
+			_resxCancellation = cancellation;
+			btnStartResxTranslate.Enabled = false;
+			btnCancelResxTranslate.Enabled = true;
+			ResxProgressCallback reportProgress = (max, pos, status) =>
+				BeginInvoke(new Action(() =>
 				{
-					AppLog.Info("TranslateResxFilesAsync delegate callback invoked. Setting IsBusy(false).");
-					IsBusy(false);
-				},
-				null);
+					if (_resxCancellation == cancellation && !cancellation.IsCancellationRequested)
+						ResxWorkingProgress(max, pos, status);
+				}));
+			try
+			{
+				lblResxTranslateStatus.Text = await Task.Run(() => TranslateResxFilesAsync(sourceResx, srcLng, translationOptions,
+					destLanguages, destDir, reportProgress, translateFromKey, onlyNew,
+					generateCsv, csvDir, cancellation.Token));
+			}
+			finally
+			{
+				btnStartResxTranslate.Enabled = true;
+				btnCancelResxTranslate.Enabled = false;
+				_resxCancellation = null;
+				cancellation.Dispose();
+			}
+		}
+
+		private void btnCancelResxTranslate_Click(object sender, EventArgs e)
+		{
+			btnCancelResxTranslate.Enabled = false;
+			lblResxTranslateStatus.Text = "Cancelling translation...";
+			_resxCancellation?.Cancel();
 		}
 
 		private delegate void ResxProgressCallback(int max, int pos, string status);
 
-		async void TranslateResxFilesAsync(
+		async Task<string> TranslateResxFilesAsync(
 			string sourceResx,
 			string sourceLng,
 			TranslationOptions translationOptions,
@@ -740,7 +761,8 @@ namespace AutoResxTranslator
 			bool translateFromKey,
 			bool translateOnlyNewKeys,
 			bool generateCsv,
-			string generateCsvDir)
+			string generateCsvDir,
+			CancellationToken cancellationToken)
 		{
 			var totalSw = Stopwatch.StartNew();
 			int max = 0;
@@ -748,6 +770,7 @@ namespace AutoResxTranslator
 			int trycount = 0;
 			string status = "";
 			bool hasErrors = false;
+			bool wasCancelled = false;
 			AppLog.Info(
 				$"TranslateResxFilesAsync start | source='{sourceResx}' sourceLng={sourceLng} destDir='{destDir}' " +
 				$"destCount={desLanguages?.Count ?? 0} service={translationOptions.ServiceType} translateFromKey={translateFromKey} onlyNew={translateOnlyNewKeys} csv={generateCsv}");
@@ -760,6 +783,7 @@ namespace AutoResxTranslator
 			{
 				foreach (var destLng in desLanguages)
 				{
+					cancellationToken.ThrowIfCancellationRequested();
 					var languageSw = Stopwatch.StartNew();
 					var destFile = Path.Combine(destDir, sourceResxFilename + "." + destLng + ".resx");
 					AppLog.Info($"Language start | target={destLng} destFile='{destFile}'");
@@ -789,17 +813,18 @@ namespace AutoResxTranslator
 
 					pos = 0;
 					status = "Translating language: " + destLng;
-					progress.BeginInvoke(max, pos, status, null, null);
+					progress(max, pos, status);
 
 					try
 					{
 						int destIndexCorrection = 0;
 						foreach (var (node, index) in dataList.Select((n, i) => (n, i)))
 						{
+							cancellationToken.ThrowIfCancellationRequested();
 							var itemSw = Stopwatch.StartNew();
 							status = "Translating language: " + destLng;
 							pos += 1;
-							progress.BeginInvoke(max, pos, status, null, null);
+							progress(max, pos, status);
 							var valueNode = ResxTranslator.GetDataValueNode(node);
 							var keyNode = ResxTranslator.GetDataKeyName(node);
 							AppLog.Info($"Key start | target={destLng} index={index + 1}/{max} key='{SafeText(keyNode, 120)}'");
@@ -869,7 +894,7 @@ namespace AutoResxTranslator
 										try
 										{
 											AppLog.Info($"Google call | target={destLng} index={index + 1} try={trycount + 1}");
-											success = GTranslateService.Translate(orgText, sourceLng, destLng, textTranslatorUrlKey, out translated);
+											success = GTranslateService.Translate(orgText, sourceLng, destLng, textTranslatorUrlKey, out translated, cancellationToken);
 										}
 										catch (Exception ex)
 										{
@@ -881,10 +906,12 @@ namespace AutoResxTranslator
 										if (!success)
 										{
 											status = "Translating language: " + destLng + " , key '" + keyNode + "' failed to translate in try " + trycount;
-											progress.BeginInvoke(max, pos, status, null, null);
+											progress(max, pos, status);
 										}
 
-									} while (success == false && trycount <= 2);
+									} while (success == false && trycount <= 2 && !cancellationToken.IsCancellationRequested);
+
+									cancellationToken.ThrowIfCancellationRequested();
 
 									if (success)
 									{
@@ -908,7 +935,8 @@ namespace AutoResxTranslator
 								{
 									AppLog.Info($"Microsoft call | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}' textLength={orgText.Length}");
 									var translationResult = await MsTranslateService.TranslateAsync(orgText, sourceLng, destLng,
-										translationOptions.MsSubscriptionKey, translationOptions.MsSubscriptionRegion);
+										translationOptions.MsSubscriptionKey, translationOptions.MsSubscriptionRegion, cancellationToken);
+									cancellationToken.ThrowIfCancellationRequested();
 
 									if (translationResult.Success)
 									{
@@ -936,7 +964,8 @@ namespace AutoResxTranslator
 								{
 									AppLog.Info($"DeepL call | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}' textLength={orgText.Length}");
 									var translationResult = await DeepLTranslateService.TranslateAsync(orgText, sourceLng, destLng,
-										translationOptions.DeepLSubscriptionKey, translationOptions.DeepLSubscriptionRegion);
+										translationOptions.DeepLSubscriptionKey, translationOptions.DeepLSubscriptionRegion, cancellationToken);
+									cancellationToken.ThrowIfCancellationRequested();
 
 									if (translationResult.Success)
 									{
@@ -968,6 +997,8 @@ namespace AutoResxTranslator
 							}
 							catch (Exception ex)
 							{
+								if (cancellationToken.IsCancellationRequested)
+									throw new OperationCanceledException(cancellationToken);
 								hasErrors = true;
 								AppLog.Error($"Unhandled key exception | target={destLng} index={index + 1} key='{SafeText(keyNode, 120)}'", ex);
 								try
@@ -983,24 +1014,34 @@ namespace AutoResxTranslator
 					}
 					finally
 					{
-						// now save the data!
-						doc.Save(destFile);
-						AppLog.Info($"Language file saved | target={destLng} file='{destFile}'");
-
-						if (generateCsv)
+						if (!cancellationToken.IsCancellationRequested)
 						{
-							if (!Directory.Exists(generateCsvDir))
-								Directory.CreateDirectory(generateCsvDir);
-							var csvFile = Path.Combine(generateCsvDir, sourceResxFilename + "." + destLng + ".resx.csv");
+							// Save only completed languages.
+							doc.Save(destFile);
+							AppLog.Info($"Language file saved | target={destLng} file='{destFile}'");
 
-							File.WriteAllLines(csvFile, new string[] { "KEY,Value" }, Encoding.UTF8);
-							File.AppendAllLines(csvFile, csvOutputDataBuffer, Encoding.UTF8);
-							AppLog.Info($"Language CSV saved | target={destLng} file='{csvFile}'");
+							if (generateCsv)
+							{
+								if (!Directory.Exists(generateCsvDir))
+									Directory.CreateDirectory(generateCsvDir);
+								var csvFile = Path.Combine(generateCsvDir, sourceResxFilename + "." + destLng + ".resx.csv");
+
+								File.WriteAllLines(csvFile, new string[] { "KEY,Value" }, Encoding.UTF8);
+								File.AppendAllLines(csvFile, csvOutputDataBuffer, Encoding.UTF8);
+								AppLog.Info($"Language CSV saved | target={destLng} file='{csvFile}'");
+							}
+
+							AppLog.Info($"Language done | target={destLng} elapsedMs={languageSw.ElapsedMilliseconds}");
 						}
-
-						AppLog.Info($"Language done | target={destLng} elapsedMs={languageSw.ElapsedMilliseconds}");
 					}
 				}
+				cancellationToken.ThrowIfCancellationRequested();
+			}
+			catch (OperationCanceledException)
+			{
+				wasCancelled = true;
+				status = "Translation cancelled.";
+				AppLog.Info("ResX translation cancelled.");
 			}
 			catch (Exception ex)
 			{
@@ -1009,18 +1050,18 @@ namespace AutoResxTranslator
 				AppLog.Error("TranslateResxFilesAsync unhandled exception.", ex);
 			}
 
-			if (hasErrors)
+			if (!wasCancelled && hasErrors)
 			{
 				status = "Translation finished. Errors are logged in to '" + errorLogFilename + "'.";
 			}
-			else
+			else if (!wasCancelled)
 			{
 				status = "Translation finished.";
 			}
 
 			AppLog.Info($"TranslateResxFilesAsync done | hasErrors={hasErrors} elapsedMs={totalSw.ElapsedMilliseconds}");
 
-			progress.BeginInvoke(max, pos, status, null, null);
+			return status;
 
 		}
 
