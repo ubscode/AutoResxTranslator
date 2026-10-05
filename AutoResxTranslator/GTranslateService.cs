@@ -7,6 +7,7 @@ using System.Text;
 using System.Web;
 using System.Threading;
 using System.Globalization;
+using Newtonsoft.Json.Linq;
 
 /* 
  * AutoResxTranslator
@@ -170,18 +171,13 @@ namespace AutoResxTranslator
 
 			try
 			{
-				dynamic obj = SimpleJson.DeserializeObject(text);
-
-				var final = "";
-
-				// the number of lines
-				int lines = obj[0].Count;
-				for (int i = 0; i < lines; i++)
-				{
-					// the translated text.
-					final += (obj[0][i][0]).ToString();
-				}
-				result = final;
+				var obj = JToken.Parse(text);
+				var segments = obj is JObject ? obj["sentences"] : obj[0];
+				var final = new StringBuilder();
+				foreach (var segment in segments)
+					final.Append((string)(segment is JObject ? segment["trans"] : segment[0]));
+				result = final.ToString();
+				if (result.Length == 0) return false;
 				return true;
 			}
 			catch (Exception ex)

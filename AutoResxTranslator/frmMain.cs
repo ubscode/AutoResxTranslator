@@ -30,6 +30,7 @@ namespace AutoResxTranslator
 		public frmMain()
 		{
 			InitializeComponent();
+			InitializeManualTab();
 			AppLog.Info("frmMain initialized.");
 		}
 
@@ -191,6 +192,7 @@ namespace AutoResxTranslator
 			StyleButton(btnStartResxTranslate, true);
 			StyleButton(btnCancelResxTranslate, false);
 			StyleButton(btnImportExcel, true);
+			StyleButton(_manualStart, true);
 
 			lnkAbout.LinkColor = _ubsAccent;
 			lnkAbout.ActiveLinkColor = _ubsAccentPressed;
@@ -1544,7 +1546,7 @@ namespace AutoResxTranslator
 				AppLog.Info("Translation settings saved.");
 				_translateSettingsChanged = false;
 			}
-			_translateSettingsChanged = s.SelectedTab.Name == "tabTranslateServices";
+			_translateSettingsChanged = s.SelectedTab?.Name == "tabTranslateServices";
 			AppLog.Info($"_translateSettingsChanged={_translateSettingsChanged}");
 		}
 	}
